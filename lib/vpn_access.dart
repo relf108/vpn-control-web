@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:url_launcher/link.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 final mullvadAccountUrl = Uri.https('mullvad.net', '/en/account/login');
 
@@ -161,11 +161,36 @@ class VpnAccessNotice extends StatelessWidget {
       ),
     );
 
-    if (onOpen != null) return notice(onOpen);
-    return Link(
-      uri: mullvadAccountUrl,
-      target: LinkTarget.blank,
-      builder: (context, followLink) => notice(followLink),
+    Future<void> openAccount() async {
+      var opened = false;
+      try {
+        opened = await launchUrl(
+          mullvadAccountUrl,
+          mode: LaunchMode.externalApplication,
+          webOnlyWindowName: '_blank',
+        );
+      } catch (_) {
+        // Browser popup restrictions or a missing launcher must not break VPN controls.
+      }
+      if (!opened && context.mounted) {
+        ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not open Mullvad. Allow pop-ups and try again.',
+            ),
+          ),
+        );
+      }
+    }
+
+    // Link embeds a web platform view, splitting the canvas around rounded clips.
+    // Keep this card Flutter-only while retaining accessible link semantics.
+    return MergeSemantics(
+      child: Semantics(
+        link: true,
+        linkUrl: mullvadAccountUrl,
+        child: notice(onOpen ?? openAccount),
+      ),
     );
   }
 }

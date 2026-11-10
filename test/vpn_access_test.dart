@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:url_launcher/link.dart';
 import 'package:vpn_control_web/vpn_access.dart';
@@ -81,11 +82,81 @@ void main() {
     'link goes to the fixed Mullvad account page without credentials',
     (tester) async {
       await tester.pumpWidget(preview(account));
-      final link = tester.widget<Link>(find.byType(Link));
-      expect(link.uri, Uri.parse('https://mullvad.net/en/account/login'));
-      expect(link.target, LinkTarget.blank);
-      expect(link.uri!.query, isEmpty);
-      expect(link.uri!.userInfo, isEmpty);
+      final link = tester.widget<Semantics>(
+        find.byWidgetPredicate(
+          (widget) =>
+              widget is Semantics &&
+              widget.properties.linkUrl == mullvadAccountUrl,
+        ),
+      );
+      expect(link.properties.link, isTrue);
+      expect(
+        link.properties.linkUrl,
+        Uri.parse('https://mullvad.net/en/account/login'),
+      );
+      expect(mullvadAccountUrl.query, isEmpty);
+      expect(mullvadAccountUrl.userInfo, isEmpty);
+      expect(find.byType(Link), findsNothing);
+      expect(find.byType(PlatformViewLink), findsNothing);
+      expect(find.byType(HtmlElementView), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'default click opens Mullvad externally without a platform view',
+    (tester) async {
+      const channel = MethodChannel('plugins.flutter.io/url_launcher');
+      final calls = <MethodCall>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
+        call,
+      ) async {
+        calls.add(call);
+        return true;
+      });
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      await tester.pumpWidget(preview(account));
+      await tester.tap(find.text('Manage on Mullvad'));
+      await tester.pumpAndSettle();
+      expect(calls, hasLength(1));
+      expect(calls.single.method, 'launch');
+      expect(
+        calls.single.arguments['url'],
+        'https://mullvad.net/en/account/login',
+      );
+      expect(calls.single.arguments['useWebView'], isFalse);
+      expect(calls.single.arguments['useSafariVC'], isFalse);
+      expect(find.byType(PlatformViewLink), findsNothing);
+      expect(find.byType(HtmlElementView), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'blocked launches show feedback instead of breaking the dashboard',
+    (tester) async {
+      const channel = MethodChannel('plugins.flutter.io/url_launcher');
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        channel,
+        (_) async => false,
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          channel,
+          null,
+        ),
+      );
+      await tester.pumpWidget(preview(account));
+      await tester.tap(find.text('Manage on Mullvad'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Could not open Mullvad. Allow pop-ups and try again.'),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
     },
   );
 
