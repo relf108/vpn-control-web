@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:vpn_control_web/api.dart';
 import 'package:vpn_control_web/main.dart';
+import 'package:vpn_control_web/relay_map.dart';
 
 void main() {
   testWidgets('phone layout signs in and confirms a selected bypass', (
@@ -44,7 +45,14 @@ void main() {
         return http.Response(jsonEncode(data), 200);
       }),
     );
-    await tester.pumpWidget(MaterialApp(home: Dashboard(api: api)));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Dashboard(
+          api: api,
+          relayAtlas: Future.value(const RelayAtlas(locations: {}, land: [])),
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField).first, 'operator');
     await tester.enterText(find.byType(TextField).last, 'synthetic-password');
@@ -52,6 +60,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Home VPN'), findsOneWidget);
     expect(find.text('Living room TV'), findsOneWidget);
+    final exitRegion = tester.getTopLeft(find.text('Mullvad · exit region')).dy;
+    final wholeNetwork = tester.getTopLeft(find.text('Whole network')).dy;
+    final devices = tester
+        .getTopLeft(find.text('Devices · temporary exceptions'))
+        .dy;
+    final status = tester.getTopLeft(find.text('Gateway status')).dy;
+    expect(status, lessThan(exitRegion));
+    expect(exitRegion, lessThan(wholeNetwork));
+    expect(wholeNetwork, lessThan(devices));
+    await tester.ensureVisible(find.byType(CheckboxListTile));
     await tester.tap(find.byType(CheckboxListTile));
     await tester.pumpAndSettle();
     await tester.ensureVisible(find.text('Bypass selected'));

@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'gateway_status.dart';
+import 'relay_map.dart';
 
 void main() => runApp(const VpnApp());
 
@@ -26,8 +28,9 @@ class VpnApp extends StatelessWidget {
 }
 
 class Dashboard extends StatefulWidget {
-  const Dashboard({super.key, this.api});
+  const Dashboard({super.key, this.api, this.relayAtlas});
   final VpnApi? api;
+  final Future<RelayAtlas>? relayAtlas;
   @override
   State<Dashboard> createState() => _DashboardState();
 }
@@ -40,6 +43,8 @@ class _DashboardState extends State<Dashboard> {
   List<Map<String, dynamic>> _devices = [];
   List<Map<String, dynamic>> _relays = [];
   String _status = '';
+  DateTime? _statusUpdatedAt;
+  Map<String, dynamic>? _accountInfo;
   String _message = '';
   String _relay = 'configured';
   int _minutes = 15;
@@ -96,11 +101,21 @@ class _DashboardState extends State<Dashboard> {
     final devices = await _api.request('devices');
     final relays = await _api.request('relays');
     final status = await _api.request('status');
+    final statusUpdatedAt = DateTime.now();
+    Map<String, dynamic> account;
+    try {
+      account = await _api.request('account');
+    } catch (error) {
+      if (error is ApiException && error.unauthorized) rethrow;
+      account = {'state': 'unavailable'};
+    }
     if (!mounted) return;
     setState(() {
       _devices = (devices['devices'] as List).cast<Map<String, dynamic>>();
       _relays = (relays['relays'] as List).cast<Map<String, dynamic>>();
       _status = status['message'] as String;
+      _statusUpdatedAt = statusUpdatedAt;
+      _accountInfo = account;
       _selected.retainAll(_devices.map((d) => d['address'] as String));
     });
   }
@@ -277,6 +292,77 @@ class _DashboardState extends State<Dashboard> {
         'Home VPN stays on. Untunnelled IPv6 stays blocked.',
       ),
       const SizedBox(height: 24),
+      GatewayStatus(
+        account: _accountInfo,
+        status: _status,
+        updatedAt: _statusUpdatedAt,
+        refreshing: _busy,
+      ),
+      const SizedBox(height: 20),
+      _panel(
+        'Mullvad · exit region',
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            RelayMap(
+              atlas: widget.relayAtlas,
+              relays: _relays,
+              selected: _relay,
+              onSelected: _busy ? null : (id) => setState(() => _relay = id),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'Selection is a requested destination, not live status. '
+              'Restarting Mullvad restores the configured default.',
+            ),
+            const SizedBox(height: 12),
+            DropdownButton<String>(
+              isExpanded: true,
+              value: _relay,
+              items: _relays
+                  .map(
+                    (r) => DropdownMenuItem(
+                      value: r['id'] as String,
+                      child: Text(
+                        r['label'] as String,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _busy
+                  ? null
+                  : (value) => setState(() => _relay = value!),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonal(
+              onPressed: _busy ? null : () => _act('switch'),
+              child: const Text('Change relay'),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 20),
+      _panel(
+        'Whole network',
+        Wrap(
+          spacing: 12,
+          runSpacing: 12,
+          children: [
+            OutlinedButton.icon(
+              onPressed: _busy ? null : () => _act('restore', all: true),
+              icon: const Icon(Icons.shield_outlined),
+              label: const Text('Restore all devices'),
+            ),
+            TextButton.icon(
+              onPressed: _busy ? null : () => _act('bypass', all: true),
+              icon: const Icon(Icons.warning_amber_rounded),
+              label: const Text('Bypass all devices'),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 20),
       _panel(
         'Devices · temporary exceptions',
         Column(
@@ -342,65 +428,6 @@ class _DashboardState extends State<Dashboard> {
                   label: const Text('Restore selected'),
                 ),
               ],
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 20),
-      _panel(
-        'Mullvad · exit region',
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Selection is a requested destination, not live status. '
-              'Restarting Mullvad restores the configured default.',
-            ),
-            const SizedBox(height: 12),
-            DropdownButton<String>(
-              isExpanded: true,
-              value: _relay,
-              items: _relays
-                  .map(
-                    (r) => DropdownMenuItem(
-                      value: r['id'] as String,
-                      child: Text(
-                        r['label'] as String,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  )
-                  .toList(),
-              onChanged: _busy
-                  ? null
-                  : (value) => setState(() => _relay = value!),
-            ),
-            const SizedBox(height: 12),
-            FilledButton.tonal(
-              onPressed: _busy ? null : () => _act('switch'),
-              child: const Text('Change relay'),
-            ),
-          ],
-        ),
-      ),
-      const SizedBox(height: 20),
-      _panel('Gateway status', SelectableText(_status)),
-      const SizedBox(height: 20),
-      _panel(
-        'Whole network',
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: [
-            OutlinedButton.icon(
-              onPressed: _busy ? null : () => _act('restore', all: true),
-              icon: const Icon(Icons.shield_outlined),
-              label: const Text('Restore all devices'),
-            ),
-            TextButton.icon(
-              onPressed: _busy ? null : () => _act('bypass', all: true),
-              icon: const Icon(Icons.warning_amber_rounded),
-              label: const Text('Bypass all devices'),
             ),
           ],
         ),

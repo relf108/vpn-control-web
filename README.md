@@ -5,6 +5,24 @@ Includes login, passive device discovery, selected/global timed bypass and
 restore, approved Mullvad relay selection, status, and manual/minutely refresh.
 Destructive or privacy-reducing actions require confirmation.
 
+Gateway status includes a clickable **VPN access** notice showing remaining
+account credit as `years / months / days` (for example, `0y / 2m / 14d remaining`).
+It uses whole UTC calendar units, handles leap years/month ends, and does not round
+partial days up. Expired, unavailable, unconfigured and stale data are labelled
+explicitly. Clicking opens `https://mullvad.net/en/account/login` in a new tab;
+no credential is included in the URL. Automatic checks require the API's optional
+`mullvadAccountFile` runtime credential; this frontend never receives the account
+number. Preview dates are simulated, not live account checks.
+
+The offline relay atlas shows public city locations for approved API relays.
+Click a dot or use the relay list to select a destination, then confirm with
+**Change relay**. Zoom/pan helps separate nearby cities. Gold highlights the
+requested destination, not the live tunnel endpoint. Configured defaults and
+custom relays without known coordinates remain available in the list; the map
+does not guess their locations. The bundled Natural Earth outline and Mullvad
+city snapshot make no external tile, geolocation, or map-service requests.
+See `assets/map/README.md` for data provenance and attribution.
+
 ## NixOS
 
 Add this flake and the API flake as inputs, following the host's nixpkgs. Import
