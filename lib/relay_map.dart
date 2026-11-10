@@ -18,9 +18,15 @@ class GeoPoint {
 }
 
 class RelayAtlas {
-  const RelayAtlas({required this.locations, required this.land});
+  const RelayAtlas({
+    required this.locations,
+    required this.land,
+    this.landPolygons,
+  });
   final Map<String, GeoPoint> locations;
   final List<List<GeoPoint>> land;
+  // Keep exterior rings and their holes together, but separate distinct islands.
+  final List<List<List<GeoPoint>>>? landPolygons;
 
   static Future<RelayAtlas> load() async {
     final assets = await Future.wait([
@@ -40,6 +46,7 @@ class RelayAtlas {
       }
     }
     final land = <List<GeoPoint>>[];
+    final landPolygons = <List<List<GeoPoint>>>[];
     for (final feature in features) {
       final geometry = feature['geometry'];
       final coordinates = geometry['coordinates'] as List;
@@ -47,8 +54,9 @@ class RelayAtlas {
           ? coordinates
           : [coordinates];
       for (final polygon in polygons) {
+        final rings = <List<GeoPoint>>[];
         for (final ring in polygon) {
-          land.add([
+          rings.add([
             for (final point in ring)
               GeoPoint(
                 (point[1] as num).toDouble(),
@@ -56,9 +64,15 @@ class RelayAtlas {
               ),
           ]);
         }
+        land.addAll(rings);
+        landPolygons.add(rings);
       }
     }
-    return RelayAtlas(locations: locations, land: land);
+    return RelayAtlas(
+      locations: locations,
+      land: land,
+      landPolygons: landPolygons,
+    );
   }
 }
 
@@ -387,25 +401,33 @@ class _AtlasPainter extends CustomPainter {
         grid,
       );
     }
-    final land = Path()..fillType = PathFillType.evenOdd;
-    for (final ring in atlas.land) {
-      if (ring.isEmpty) continue;
-      final first = ring.first.project(size);
-      land.moveTo(first.dx, first.dy);
-      for (final coordinate in ring.skip(1)) {
-        final point = coordinate.project(size);
-        land.lineTo(point.dx, point.dy);
+    final landFill = Paint()..color = const Color(0xff27434b);
+    final coastline = Paint()
+      ..color = primary.withValues(alpha: 0.18)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.7;
+    final polygons =
+        atlas.landPolygons ??
+        [
+          for (final ring in atlas.land) [ring],
+        ];
+    // Small, independent paths avoid a single complex world mesh in CanvasKit.
+    // Keep holes in the same path as their exterior so inland water stays clear.
+    for (final polygon in polygons) {
+      final land = Path()..fillType = PathFillType.evenOdd;
+      for (final ring in polygon) {
+        if (ring.isEmpty) continue;
+        final first = ring.first.project(size);
+        land.moveTo(first.dx, first.dy);
+        for (final coordinate in ring.skip(1)) {
+          final point = coordinate.project(size);
+          land.lineTo(point.dx, point.dy);
+        }
+        land.close();
       }
-      land.close();
+      canvas.drawPath(land, landFill);
+      canvas.drawPath(land, coastline);
     }
-    canvas.drawPath(land, Paint()..color = const Color(0xff27434b));
-    canvas.drawPath(
-      land,
-      Paint()
-        ..color = primary.withValues(alpha: 0.18)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 0.7,
-    );
     // Paint the chosen marker last, keeping it visible in dense city clusters.
     final ordered = [
       ...markers.where((m) => m.id != selected),

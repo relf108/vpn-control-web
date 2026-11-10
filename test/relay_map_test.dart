@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:vpn_control_web/relay_map.dart';
 
@@ -37,6 +39,16 @@ Widget preview({
   ),
 );
 
+class _PathCanvas implements Canvas {
+  final paths = <Path>[];
+
+  @override
+  void drawPath(Path path, Paint paint) => paths.add(Path.from(path));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
 void main() {
   test(
     'geographic projection places known cities in the correct hemisphere',
@@ -57,6 +69,60 @@ void main() {
     expect(data.locations['au-mel']!.latitude, closeTo(-37.815018, 0.000001));
     expect(data.locations['configured'], isNull);
     expect(data.land.length, greaterThan(100));
+    expect(data.landPolygons!.length, 127);
+    expect(
+      data.landPolygons!.where((polygon) => polygon.length > 1),
+      isNotEmpty,
+    );
+  });
+
+  testWidgets('land polygons paint independently and preserve interior holes', (
+    tester,
+  ) async {
+    const outer = [
+      GeoPoint(60, -120),
+      GeoPoint(0, -120),
+      GeoPoint(0, -60),
+      GeoPoint(60, -60),
+    ];
+    const hole = [
+      GeoPoint(40, -100),
+      GeoPoint(20, -100),
+      GeoPoint(20, -80),
+      GeoPoint(40, -80),
+    ];
+    const island = [GeoPoint(-10, 110), GeoPoint(-40, 110), GeoPoint(-40, 155)];
+    const shapes = RelayAtlas(
+      locations: {},
+      land: [outer, hole, island],
+      landPolygons: [
+        [outer, hole],
+        [island],
+      ],
+    );
+    await tester.pumpWidget(preview(data: Future.value(shapes)));
+    await tester.pumpAndSettle();
+    final finder = find.descendant(
+      of: find.byKey(const ValueKey('relay-map-surface')),
+      matching: find.byType(CustomPaint),
+    );
+    final painter = tester.widget<CustomPaint>(finder).painter!;
+    final size = tester.getSize(finder);
+    final canvas = _PathCanvas();
+    painter.paint(canvas, size);
+    expect(canvas.paths.length, 4); // Separate fill/stroke for each polygon.
+    expect(
+      canvas.paths.first.contains(const GeoPoint(50, -110).project(size)),
+      isTrue,
+    );
+    expect(
+      canvas.paths.first.contains(const GeoPoint(30, -90).project(size)),
+      isFalse,
+    );
+    expect(
+      canvas.paths[2].contains(const GeoPoint(-30, 130).project(size)),
+      isTrue,
+    );
   });
 
   testWidgets('map dot chooses an allowed destination without connecting', (
@@ -155,4 +221,102 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'coastlines stay visible across desktop resizes and pixel ratios',
+    (tester) async {
+      final data = (await tester.runAsync(RelayAtlas.load))!;
+      final capture = GlobalKey();
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const samples = [
+        GeoPoint(-25, 134), // Inland Australia.
+        GeoPoint(10, 20), // Inland Africa.
+        GeoPoint(40, -100), // North America.
+        GeoPoint(50, 100), // Inland Asia.
+      ];
+      for (final ratio in [1.0, 1.25, 2.0]) {
+        tester.view.devicePixelRatio = ratio;
+        for (final viewport in [
+          const Size(1920, 1080),
+          const Size(960, 1080),
+          const Size(1440, 900),
+          const Size(800, 900),
+          const Size(1920, 1080),
+        ]) {
+          tester.view.physicalSize = viewport * ratio;
+          await tester.pumpWidget(
+            MaterialApp(
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 1080),
+                        child: RepaintBoundary(
+                          key: capture,
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: RelayMap(
+                              relays: relays,
+                              selected: 'configured',
+                              onSelected: (_) {},
+                              atlas: Future.value(data),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          final boundary =
+              capture.currentContext!.findRenderObject()!
+                  as RenderRepaintBoundary;
+          final origin = boundary.localToGlobal(Offset.zero);
+          final surface = tester.getRect(
+            find.byKey(const ValueKey('relay-map-surface')),
+          );
+          final pixels = (await tester.runAsync(() async {
+            final image = await boundary.toImage(pixelRatio: ratio);
+            try {
+              return (
+                width: image.width,
+                bytes: (await image.toByteData(
+                  format: ui.ImageByteFormat.rawRgba,
+                ))!,
+              );
+            } finally {
+              image.dispose();
+            }
+          }))!;
+          for (final sample in samples) {
+            final point =
+                surface.topLeft - origin + sample.project(surface.size);
+            final offset =
+                ((point.dy * ratio).floor() * pixels.width +
+                    (point.dx * ratio).floor()) *
+                4;
+            expect(
+              [
+                pixels.bytes.getUint8(offset),
+                pixels.bytes.getUint8(offset + 1),
+                pixels.bytes.getUint8(offset + 2),
+                pixels.bytes.getUint8(offset + 3),
+              ],
+              [0x27, 0x43, 0x4b, 0xff],
+              reason:
+                  'Land must render at $viewport, DPR $ratio, '
+                  '${sample.latitude}/${sample.longitude}.',
+            );
+          }
+          expect(tester.takeException(), isNull);
+        }
+      }
+    },
+  );
 }
